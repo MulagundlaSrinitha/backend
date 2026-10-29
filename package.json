@@ -1,0 +1,44 @@
+{
+  "name": "next360",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "clean": "turbo clean",
+    "seed:admin:bulk": "ts-node --project tsconfig.base.json prisma/seed-admin-bulk.ts",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+  },
+  "devDependencies": {
+    "@types/multer": "^2.1.0",
+    "@types/passport-jwt": "^4.0.1",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  },
+  "packageManager": "npm@11.13.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/mapped-types": "^2.1.1",
+    "@nestjs/passport": "^11.0.5",
+    "@nestjs/platform-express": "^11.1.27",
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.113.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "multer": "^2.2.0",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "uuid": "^14.0.1"
+  }
+}

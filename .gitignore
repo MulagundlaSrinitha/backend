@@ -1,0 +1,44 @@
+node_modules/
+.turbo/
+dist/
+.next/
+.expo/
+*.env
+.env.local
+.env.backup
+.env.development.local
+.env.test.local
+.env.production.local
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+Thumbs.db
+
+# Local-only planning/CI files (not shared via git)
+.github/workflows/
+.planning/
+
+# Persistent project memory (local documentation only, never commit)
+.claude/memory/
+
+# Agent skills (installed locally, not project code)
+.agents/skills/
+
+#next360 backup file
+next360_backup.dump
+
+# Local reference files
+_references/
+loyalty-engine/
+
+# Build artifacts
+build/
+*.apk
+*.aab
+
+# Local backend audit / implementation reports
+tasks/backend-integration-audit-report.md
+tasks/delivery-app-implementation-audit.md
+tasks/delivery-lifecycle-phase1-report.md
+tasks/delivery-lifecycle-phase2-report.md

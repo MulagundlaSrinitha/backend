@@ -1,0 +1,969 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ─────────────────────────────────────────────────────────────────────
+
+enum StoreType {
+  ORGANIC
+  NATURAL
+  ECO_FRIENDLY
+}
+
+enum SellerType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  DELIVERY_PARTNER
+  ADMIN
+}
+
+// Full order + delivery lifecycle. The delivery leg (ASSIGNED_TO_DELIVERY
+// onwards) is tracked per OrderVendorGroup using these same values — there is
+// deliberately no second, competing delivery-status enum.
+enum OrderStatus {
+  PLACED
+  CONFIRMED
+  PACKED
+  READY_FOR_PICKUP
+  ASSIGNED_TO_DELIVERY
+  GOING_TO_PICKUP
+  ARRIVED_AT_PICKUP
+  PICKED_UP
+  OUT_FOR_DELIVERY
+  ARRIVED_AT_CUSTOMER
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum VendorStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+  REJECTED
+}
+
+enum DeliveryPartnerStatus {
+  OFFLINE
+  AVAILABLE
+  ON_DELIVERY
+}
+
+enum VendorKycDocumentType {
+  PAN
+  AADHAAR
+  GST_CERTIFICATE
+  FSSAI_LICENSE
+  NPOP_CERTIFICATE
+  BANK_STATEMENT
+  CANCELLED_CHEQUE
+  BANK_PASSBOOK
+}
+
+enum VendorKycDocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum KycStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum ReturnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REFUNDED
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+}
+
+enum LoyaltyTier {
+  SEED
+  SEEDLING
+  SAPLING
+  PLANT
+  YOUNG_TREE
+  TREE
+  MATURE_TREE
+  FOREST
+}
+
+enum PointsTransactionType {
+  PURCHASE_REWARD
+  REFERRAL_REWARD
+  REVIEW_REWARD
+  BIRTHDAY_BONUS
+  REDEMPTION
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+enum ReferralStatus {
+  PENDING
+  REWARDED
+  EXPIRED
+  REJECTED
+}
+
+// ─── Models ────────────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  // Both optional (not both-required) since the two signup paths only ever
+  // populate one at creation time: customer-app's phone-OTP flow (phone) vs.
+  // vendor/admin's email+password flow (email). @unique still enforces
+  // uniqueness when a value IS set — Postgres doesn't apply unique
+  // constraints across NULLs, so either can be freely absent.
+  email     String?  @unique
+  phone     String?  @unique
+  name      String?
+  role      UserRole @default(CUSTOMER)
+  avatarUrl String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Loyalty fields
+  referralCode String?   @unique
+  referredBy   String?
+  dateOfBirth  DateTime?
+
+  addresses         Address[]
+  cartItems         CartItem[]
+  orders            Order[]
+  vendor            Vendor?
+  deliveryPartner   DeliveryPartner?
+  kyc               KYC?
+  returnRequests    ReturnRequest[]
+  wishlistItems     WishlistItem[]
+  reviews           Review[]
+  notifications     Notification[]
+  aiLogs            AI_Log[]
+  aiRecommendations AI_Recommendation[]
+  pushTokens        PushToken[]
+  auditLogs         AuditLog[]
+  supportTickets    SupportTicket[]
+  assignedTickets   SupportTicket[]     @relation("AssignedTickets")
+  ticketReplies     TicketReply[]
+  purchases         Purchase[]
+  pointsLedger      PointsLedger[]
+  metrics           UserMetrics?
+  referralsSent     Referral[]          @relation("SentReferrals")
+  referralReceived  Referral?           @relation("ReceivedReferral")
+}
+
+// Zone — city-based zone gating (MVP: Hyderabad + Vijayawada)
+model Zone {
+  id               String               @id @default(uuid())
+  name             String
+  city             String
+  pincodes         String[]             @default([])
+  isActive         Boolean              @default(true)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  vendors          Vendor[]
+  deliveryPartners DeliveryPartner[]
+  slotConfigs      DeliverySlotConfig[]
+}
+
+model Vendor {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+
+  storeName  String
+  storeSlug  String     @unique
+  storeType  StoreType
+  sellerType SellerType @default(INDIVIDUAL)
+
+  description String?
+  logoUrl     String?
+  bannerUrl   String?
+
+  ownerName String?
+  address   String?
+  city      String?
+  state     String?
+  pincode   String?
+
+  deliveryTimeMin Int     @default(10)
+  deliveryTimeMax Int     @default(20)
+  deliveryLabel   String?
+
+  status            VendorStatus @default(PENDING)
+  commissionPct     Float        @default(10.0)
+  razorpayAccountId String?
+
+  bankAccountName   String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  bankName          String?
+
+  kycSubmittedAt DateTime?
+
+  zoneId String
+  zone   Zone   @relation(fields: [zoneId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products     Product[]
+  vendorGroups OrderVendorGroup[]
+  coupons      Coupon[]
+  offers       Offer[]
+  commissions  Commission[]
+  payouts      Payout[]
+
+  kycDocuments VendorKycDocument[]
+}
+
+// Separate DeliveryPartner model (not just a User role)
+model DeliveryPartner {
+  id          String                @id @default(uuid())
+  userId      String                @unique
+  user        User                  @relation(fields: [userId], references: [id])
+  vehicleType String
+  zoneId      String
+  zone        Zone                  @relation(fields: [zoneId], references: [id])
+  status      DeliveryPartnerStatus @default(OFFLINE)
+  currentLat  Float?
+  currentLng  Float?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  assignments DeliveryAssignment[]
+  payouts     Payout[]
+  rejections  DeliveryRejection[]
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String
+  description String?
+  imageUrl    String?
+  storeType   StoreType
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products      Product[]
+  subCategories SubCategory[]
+
+  @@unique([slug, storeType])
+}
+
+model SubCategory {
+  id         String    @id @default(uuid())
+  name       String
+  slug       String
+  categoryId String
+  category   Category  @relation(fields: [categoryId], references: [id])
+  storeType  StoreType
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  products Product[]
+
+  @@unique([slug, storeType])
+}
+
+model Brand {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String    @unique
+  description String?
+  imageUrl    String?
+  storeType   StoreType
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  products Product[]
+}
+
+model Product {
+  id             String       @id @default(uuid())
+  vendorId       String
+  vendor         Vendor       @relation(fields: [vendorId], references: [id])
+  categoryId     String
+  category       Category     @relation(fields: [categoryId], references: [id])
+  subCategoryId  String?
+  subCategory    SubCategory? @relation(fields: [subCategoryId], references: [id])
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id])
+  name           String
+  description    String?
+  price          Decimal      @db.Decimal(10, 2)
+  compareAtPrice Decimal?     @db.Decimal(10, 2)
+  unit           String // kg, g, piece, bunch, litre, etc.
+  stock          Int          @default(0)
+  images         String[] // URLs stored in Supabase Storage
+  isActive       Boolean      @default(true)
+  isApproved     Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  variants          ProductVariant[]
+  cartItems         CartItem[]
+  orderItems        OrderItem[]
+  wishlistItems     WishlistItem[]
+  reviews           Review[]
+  aiRecommendations AI_Recommendation[]
+}
+
+model ProductVariant {
+  id        String  @id @default(uuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  name      String
+  price     Decimal @db.Decimal(10, 2)
+  stock     Int     @default(0)
+  sku       String? @unique
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, productId])
+}
+
+model WishlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+}
+
+model Review {
+  id                 String   @id @default(uuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id])
+  productId          String
+  product            Product  @relation(fields: [productId], references: [id])
+  rating             Int // 1-5
+  title              String?
+  body               String?
+  isVerifiedPurchase Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([userId, productId])
+}
+
+model Address {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  label       String? // Home, Work, Other
+  fullAddress String
+  city        String
+  state       String
+  pincode     String
+  lat         Float?
+  lng         Float?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orders Order[]
+}
+
+// One customer order can span multiple vendors — each vendor's portion is tracked independently
+model Order {
+  id              String        @id @default(uuid())
+  orderNo         String        @unique
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  addressId       String
+  address         Address       @relation(fields: [addressId], references: [id])
+  totalAmount     Decimal       @db.Decimal(10, 2)
+  paymentMethod   String // RAZORPAY | COD
+  paymentStatus   PaymentStatus @default(PENDING)
+  razorpayOrderId String?
+  status          OrderStatus   @default(PLACED)
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  vendorGroups   OrderVendorGroup[]
+  payments       Payment[]
+  payouts        Payout[]
+  returnRequests ReturnRequest[]
+  commissions    Commission[]
+}
+
+// One record per vendor per order — tracked and fulfilled independently (Swiggy/Zomato model)
+model OrderVendorGroup {
+  id                 String      @id @default(uuid())
+  orderId            String
+  order              Order       @relation(fields: [orderId], references: [id])
+  vendorId           String
+  vendor             Vendor      @relation(fields: [vendorId], references: [id])
+  subtotal           Decimal     @db.Decimal(10, 2)
+  status             OrderStatus @default(PLACED)
+  cancellationReason String?
+
+  items       OrderItem[]
+  delivery    DeliveryAssignment?
+  slotBooking DeliverySlotBooking?
+  rejections DeliveryRejection[]
+}
+
+model OrderItem {
+  id                 String           @id @default(uuid())
+  orderVendorGroupId String
+  group              OrderVendorGroup @relation(fields: [orderVendorGroupId], references: [id])
+  productId          String
+  product            Product          @relation(fields: [productId], references: [id])
+  name               String // snapshot at order time
+  priceAtPurchase    Decimal          @db.Decimal(10, 2)
+  quantity           Int
+}
+
+// One delivery assignment per OrderVendorGroup (not per Order)
+// Records the reason a delivery couldn't be completed — used when the
+// delivery partner marks an order as failed (customer unavailable, wrong
+// address, etc.) so the admin can review and take action instead of silently
+// abandoning the order.
+model DeliveryFailure {
+  id                   String             @id @default(uuid())
+  deliveryAssignmentId String             @unique
+  deliveryAssignment   DeliveryAssignment @relation(fields: [deliveryAssignmentId], references: [id])
+  reason               String // CUSTOMER_UNAVAILABLE | WRONG_ADDRESS | RESCHEDULE | RETURNED_TO_STORE | OTHER
+  details              String? // Free-text notes from the delivery partner
+  resolvedAt           DateTime?
+  createdAt            DateTime           @default(now())
+}
+
+model DeliveryAssignment {
+  id                 String           @id @default(uuid())
+  orderVendorGroupId String           @unique
+  orderVendorGroup   OrderVendorGroup @relation(fields: [orderVendorGroupId], references: [id])
+  deliveryPartnerId  String
+  deliveryPartner    DeliveryPartner  @relation(fields: [deliveryPartnerId], references: [id])
+  assignedAt         DateTime         @default(now())
+  otp                String // verified on pickup
+  pickedUpAt         DateTime?
+  deliveredAt        DateTime?
+
+  failures DeliveryFailure[]
+}
+
+model DeliveryRejection {
+  id                 String           @id @default(uuid())
+  deliveryPartnerId  String
+  deliveryPartner    DeliveryPartner  @relation(fields: [deliveryPartnerId], references: [id])
+  orderVendorGroupId String
+  orderVendorGroup   OrderVendorGroup @relation(fields: [orderVendorGroupId], references: [id])
+  reason             String?
+  createdAt           DateTime         @default(now())
+
+  @@unique([deliveryPartnerId, orderVendorGroupId])
+  @@index([orderVendorGroupId])
+  @@index([deliveryPartnerId])
+}
+
+model Payment {
+  id                String   @id @default(uuid())
+  orderId           String
+  order             Order    @relation(fields: [orderId], references: [id])
+  razorpayPaymentId String?
+  razorpayOrderId   String?
+  amount            Decimal  @db.Decimal(10, 2)
+  status            String   @default("PENDING") // PENDING, CAPTURED, FAILED, REFUNDED
+  method            String?
+  createdAt         DateTime @default(now())
+
+  @@index([razorpayOrderId])
+  @@index([razorpayPaymentId])
+  @@index([orderId])
+  @@index([status])
+}
+
+model Commission {
+  id               String    @id @default(uuid())
+  orderId          String
+  order            Order     @relation(fields: [orderId], references: [id])
+  vendorId         String
+  vendor           Vendor    @relation(fields: [vendorId], references: [id])
+  orderAmount      Decimal   @db.Decimal(10, 2)
+  commissionPct    Float
+  commissionAmount Decimal   @db.Decimal(10, 2)
+  isPaid           Boolean   @default(false)
+  paidAt           DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@unique([orderId, vendorId])
+}
+
+model Payout {
+  id                String           @id @default(uuid())
+  vendorId          String?
+  vendor            Vendor?          @relation(fields: [vendorId], references: [id])
+  deliveryPartnerId String?
+  deliveryPartner   DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id])
+  orderId           String?
+  order             Order?           @relation(fields: [orderId], references: [id])
+  amount            Decimal          @db.Decimal(10, 2)
+  status            String           @default("PENDING") // PENDING, SETTLING, PROCESSED, PAID, FAILED
+  transferId        String? // Razorpay Route transfer ID — populated after successful transfer for reconciliation
+  periodStart       DateTime?
+  periodEnd         DateTime?
+  paidAt            DateTime?
+  createdAt         DateTime         @default(now())
+
+  @@unique([orderId, vendorId])
+  @@unique([deliveryPartnerId, periodStart, periodEnd])
+  @@index([vendorId, status])
+  @@index([transferId])
+}
+
+model SupportTicket {
+  id           String   @id @default(uuid())
+  userId       String
+  subject      String
+  message      String
+  category     String // ORDER_ISSUE, VENDOR_ISSUE, DELIVERY_ISSUE, REFUND, OTHER
+  orderId      String?
+  status       String   @default("OPEN") // OPEN, ASSIGNED, RESOLVED, CLOSED
+  priority     String   @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  assignedToId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User          @relation(fields: [userId], references: [id])
+  assignedTo User?         @relation("AssignedTickets", fields: [assignedToId], references: [id])
+  replies    TicketReply[]
+}
+
+model TicketReply {
+  id        String   @id @default(uuid())
+  ticketId  String
+  userId    String
+  message   String
+  createdAt DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User          @relation(fields: [userId], references: [id])
+}
+
+model Coupon {
+  id             String     @id @default(uuid())
+  code           String     @unique
+  type           CouponType
+  value          Decimal    @db.Decimal(10, 2)
+  minOrderAmount Decimal?   @db.Decimal(10, 2)
+  maxDiscount    Decimal?   @db.Decimal(10, 2)
+  usageLimit     Int?
+  usedCount      Int        @default(0)
+  vendorId       String?
+  vendor         Vendor?    @relation(fields: [vendorId], references: [id])
+  expiresAt      DateTime?
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}
+
+model Offer {
+  id            String     @id @default(uuid())
+  title         String
+  description   String?
+  storeType     StoreType
+  discountType  CouponType
+  discountValue Decimal    @db.Decimal(10, 2)
+  startDate     DateTime
+  endDate       DateTime
+  vendorId      String?
+  vendor        Vendor?    @relation(fields: [vendorId], references: [id])
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model ReturnRequest {
+  id           String       @id @default(uuid())
+  orderId      String
+  order        Order        @relation(fields: [orderId], references: [id])
+  userId       String
+  user         User         @relation(fields: [userId], references: [id])
+  reason       String
+  status       ReturnStatus @default(PENDING)
+  refundAmount Decimal?     @db.Decimal(10, 2)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([orderId, userId])
+}
+
+model KYC {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id])
+  documentType    String
+  documentNumber  String?
+  documentUrl     String?
+  status          KycStatus @default(PENDING)
+  rejectionReason String?
+  submittedAt     DateTime  @default(now())
+  verifiedAt      DateTime?
+}
+
+model VendorKycDocument {
+  id       String @id @default(uuid())
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  documentType VendorKycDocumentType
+  storageKey   String
+  fileName     String
+  mimeType     String
+  fileSize     Int
+
+  status          VendorKycDocumentStatus @default(PENDING)
+  rejectionReason String?
+
+  reviewedBy String?
+  reviewedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([vendorId, documentType])
+  @@index([vendorId])
+  @@index([status])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  title     String
+  body      String
+  type      String // ORDER, PROMO, SYSTEM, etc.
+  data      Json?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  token     String
+  platform  String // ios, android, web
+  createdAt DateTime @default(now())
+}
+
+model AI_Log {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String // SCANNER, CHAT, RECOMMENDATION
+  input     String
+  output    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+}
+
+model AI_Recommendation {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  type      String // PERSONALIZED, SIMILAR, TRENDING
+  score     Float?
+  createdAt DateTime @default(now())
+}
+
+model CMS_Page {
+  id              String   @id @default(uuid())
+  title           String
+  slug            String   @unique
+  content         String
+  metaTitle       String?
+  metaDescription String?
+  isPublished     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Banner {
+  id          String    @id @default(uuid())
+  title       String?
+  subtitle    String? // short label next to title (e.g. "EXTRA\nDISCOUNT")
+  offerLabel  String? // compact tagline (e.g. "FRESH ARRIVALS")
+  description String? // longer description shown below the offer
+  imageUrl    String
+  linkUrl     String?
+  storeType   StoreType
+  position    Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  permissions Json? // JSON array of permission identifiers
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("app_roles")
+}
+
+model Permission {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  resource  String
+  action    String // create, read, update, delete, manage
+  createdAt DateTime @default(now())
+}
+
+// ── Platform Settings — single-row table for global platform configuration
+// The pattern is always: API reads the first (and only) row; admin panel
+// edits it via PATCH. Seeded automatically on first access if empty.
+model PlatformSettings {
+  id String @id @default(uuid())
+
+  // General
+  platformName String @default("Next360")
+  supportEmail String @default("support@next360.com")
+
+  // Commission
+  defaultCommissionPct Float @default(10.0)
+
+  // COD
+  codEnabled   Boolean @default(true)
+  codCapAmount Int     @default(2000)
+
+  // Order Limits
+  minOrderAmount Int @default(100)
+  maxOrderAmount Int @default(50000)
+
+  // Payouts
+  deliveryPartnerPayoutFreq String @default("weekly") // daily | weekly | biweekly | monthly
+
+  // Approvals
+  autoApproveVendors  Boolean @default(false)
+  autoApproveProducts Boolean @default(false)
+
+  // Maintenance
+  maintenanceMode Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── Delivery Slot — configures available delivery time windows per zone/day
+// For each day of the week a zone can have multiple slots (e.g. 9-12, 14-17).
+// The customer picks a slot at checkout; the booking reserves capacity so the
+// admin can see committed deliveries per slot and cap overselling.
+model DeliverySlotConfig {
+  id        String   @id @default(uuid())
+  zoneId    String
+  zone      Zone     @relation(fields: [zoneId], references: [id])
+  dayOfWeek Int // 0=Sunday … 6=Saturday
+  startTime String // "HH:mm" in 24h format, e.g. "09:00"
+  endTime   String // "HH:mm", e.g. "12:00"
+  maxOrders Int      @default(20)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bookings DeliverySlotBooking[]
+
+  @@index([zoneId, dayOfWeek])
+}
+
+model DeliverySlotBooking {
+  id                 String             @id @default(uuid())
+  orderVendorGroupId String             @unique
+  orderVendorGroup   OrderVendorGroup   @relation(fields: [orderVendorGroupId], references: [id])
+  slotConfigId       String
+  slotConfig         DeliverySlotConfig @relation(fields: [slotConfigId], references: [id])
+  deliveryDate       DateTime // the calendar date the slot falls on
+  timeRange          String // "09:00-12:00"
+  createdAt          DateTime           @default(now())
+}
+
+// ── Audit Log — every meaningful admin action is recorded here
+// Keeps a permanent record of who did what to which resource, when,
+// and what changed. This is the single source of truth for compliance,
+// debugging, and transparency — never pruned or aggregated away.
+model AuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  admin      User     @relation(fields: [adminId], references: [id])
+  action     String // APPROVE_VENDOR, REJECT_VENDOR, SUSPEND_VENDOR, APPROVE_PRODUCT, UPDATE_SETTINGS, etc.
+  resource   String // Vendor, Product, User, Order, Settings, Coupon, etc.
+  resourceId String? // The ID of the affected resource (vendor id, product id, etc.)
+  details    Json? // Free-form metadata: old values, new values, reason, etc.
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([adminId, createdAt])
+  @@index([resource, resourceId])
+  @@index([action])
+}
+
+// ─── Loyalty Models ─────────────────────────────────────────────────────────
+
+model Purchase {
+  id        String   @id @default(uuid())
+  userId    String
+  amount    Float
+  createdAt DateTime @default(now())
+
+  user         User           @relation(fields: [userId], references: [id])
+  pointsLedger PointsLedger[]
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model PointsLedger {
+  id              String                @id @default(uuid())
+  userId          String
+  points          Int // Positive = earned, Negative = redeemed/refunded
+  transactionType PointsTransactionType
+  sourceId        String? // Purchase ID or Referral ID
+  description     String?
+  expiresAt       DateTime
+  createdAt       DateTime              @default(now())
+
+  user     User      @relation(fields: [userId], references: [id])
+  purchase Purchase? @relation(fields: [sourceId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([expiresAt])
+}
+
+model UserMetrics {
+  userId           String      @id
+  // Points & Tier
+  pointsBalance    Int         @default(0)
+  tier             LoyaltyTier @default(SEED)
+  tierPointsEarned Int         @default(0)
+  tierEvaluatedAt  DateTime?
+
+  // RFM Segmentation
+  purchaseCount  Int       @default(0)
+  totalSpend     Float     @default(0)
+  lastPurchaseAt DateTime?
+  rfmRecency     Int       @default(0)
+  rfmFrequency   Int       @default(0)
+  rfmMonetary    Int       @default(0)
+  rfmSegment     String    @default("New")
+
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Referral {
+  id             String         @id @default(uuid())
+  referrerId     String
+  referredUserId String         @unique
+  status         ReferralStatus @default(PENDING)
+  rewardPoints   Int            @default(100)
+  createdAt      DateTime       @default(now())
+  rewardedAt     DateTime?
+
+  referrer     User @relation("SentReferrals", fields: [referrerId], references: [id])
+  referredUser User @relation("ReceivedReferral", fields: [referredUserId], references: [id])
+
+  @@index([referrerId])
+  @@index([status])
+}
+
+model LoyaltyConfig {
+  id String @id @default("default")
+
+  // Tier thresholds
+  seedThreshold       Int @default(0)
+  seedlingThreshold   Int @default(100)
+  saplingThreshold    Int @default(300)
+  plantThreshold      Int @default(600)
+  youngTreeThreshold  Int @default(1000)
+  treeThreshold       Int @default(1500)
+  matureTreeThreshold Int @default(2500)
+  forestThreshold     Int @default(5000)
+
+  // Points earning rules
+  pointsPerRupee Float @default(1.0)
+  reviewPoints   Int   @default(25)
+  referralPoints Int   @default(100)
+  birthdayPoints Int   @default(50)
+
+  // Redemption rules
+  minRedemption   Int   @default(100)
+  redemptionValue Float @default(0.1)
+
+  // Referral rules
+  referralExpiryDays Int @default(30)
+
+  // Tier multipliers
+  seedMultiplier       Float @default(1.0)
+  seedlingMultiplier   Float @default(1.1)
+  saplingMultiplier    Float @default(1.2)
+  plantMultiplier      Float @default(1.3)
+  youngTreeMultiplier  Float @default(1.5)
+  treeMultiplier       Float @default(1.8)
+  matureTreeMultiplier Float @default(2.0)
+  forestMultiplier     Float @default(2.5)
+
+  // Benefits per tier
+  seedBenefits       Json @default("[\"Welcome discount 5%\", \"Exclusive organic tips\", \"Early sale access\"]")
+  seedlingBenefits   Json @default("[\"10% off first order\", \"Birthday bonus\", \"Free delivery on ₹300+\"]")
+  saplingBenefits    Json @default("[\"15% store credit monthly\", \"Early access new products\", \"Free delivery on all orders\"]")
+  plantBenefits      Json @default("[\"20% off any order\", \"Monthly free gift\", \"Priority customer support\"]")
+  youngTreeBenefits  Json @default("[\"25% store credit\", \"Free eco-friendly tote\", \"Invite-only product drops\"]")
+  treeBenefits       Json @default("[\"30% off everything\", \"Free weekly subscription box\", \"Name in supporter wall\"]")
+  matureTreeBenefits Json @default("[\"35% off everything\", \"Personal shopper\", \"Exclusive farm visits\"]")
+  forestBenefits     Json @default("[\"40% off everything\", \"VIP events access\", \"Plant a tree in your name\"]")
+
+  updatedAt DateTime @updatedAt
+}

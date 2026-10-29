@@ -1,0 +1,11 @@
+{
+  "name": "@next360/eslint-config",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
+    "@typescript-eslint/parser": "^8.62.1",
+    "eslint": "^9.25.0"
+  }
+}
